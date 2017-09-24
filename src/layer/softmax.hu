@@ -1,0 +1,49 @@
+#ifndef SOFTMAX_HU
+#define SOFTMAX_HU
+
+__device__ void block_softmax_forward(float *y, const float *x,
+                                      const int size) {
+
+  __shared__ float acc, maxVal;
+  if (threadIdx.x == 0) {
+    maxVal = -1 * CUDART_INF_F;
+    for (int i = 0; i < size; ++i) {
+      if (x[i] > maxVal) {
+        maxVal = x[i];
+      }
+    }
+
+    acc = 0;
+    for (int i = 0; i < size; ++i) {
+      acc += exp(x[i] - maxVal);
+    }
+  }
+  __syncthreads();
+  for (int i = threadIdx.x; i < size; i += blockDim.x) {
+    y[i] = exp(x[i] - maxVal) / acc;
+  }
+}
+
+// dE/dx = dE/dy * dy/dx
+__device__ void block_softmax_backward(float *dx, const float *dy,
+                                       const float *y, const int size) {
+  if (threadIdx.x == 0) {
+    // for (int i = 0; i < size; ++i) {
+    //   float acc = 0;
+    //   for (int o = 0; o < size; ++o) {
+    //     // how oth output affected by ith input
+    //     if (i == o) {
+    //       acc += y[i] * (1 - y[i]);
+    //     } else {
+    //       acc += -1 * y[o] * y[i];
+    //     }
+    //   }
+    //   dx[i] = dy[i] * acc;
+    // }
+    for (int i = 0; i < size; ++i) {
+      dx[i] = dy[i];
+    }
+  }
+}
+
+#endif

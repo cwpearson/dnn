@@ -1,0 +1,53 @@
+#ifndef FC_HU
+#define FC_HU
+
+// Collaborative threadblock fully-connected layer forward pass
+// A matmul
+__device__ void block_fc_forward(float *y, const float *x, const float *weight,
+                                 const float *bias, const int outSize,
+                                 const int inSize) {
+  for (int o = threadIdx.x; o < outSize; o += blockDim.x) {
+    float acc = 0;
+    for (int i = 0; i < inSize; ++i) {
+      acc += x[i] * weight[i * outSize + o];
+    }
+    y[o] = acc + bias[o];
+  }
+}
+
+__device__ void block_fc_backward(float *dx /* input gradient */,
+                                  float *dw /* weight gradient */,
+                                  float *db /* bias gradient */,
+                                  const float *dy /*gradient at output*/,
+                                  const float *x, const float *weight,
+                                  const float *bias, const int outSize,
+                                  const int inSize) {
+
+  // dW (compute weight update)
+  // dE/dw = dE/dy * dy/dw = dE/dy * x
+  for (int i = 0; i < inSize; ++i) {
+    for (int j = threadIdx.x; j < outSize; j += blockDim.x) {
+      dw[i * outSize + j] += dy[j] * x[i];
+    }
+  }
+
+  // db (compute bias update)
+  // dE/db = dE/dy * dy/db = dE/dy
+  for (int o = threadIdx.x; o < outSize; o += blockDim.x) {
+    db[o] += dy[o];
+  }
+
+  // dX (backpropogate error)
+  // dE/dx = dE/dy * dy/dx = dE/dy * w
+  if (dx != 0) {
+    for (int i = threadIdx.x; i < inSize; i += blockDim.x) {
+      float acc = 0;
+      for (int j = 0; j < outSize; ++j) {
+        acc += weight[i * outSize + j] * dy[j];
+      }
+      dx[i] = acc;
+    }
+  }
+}
+
+#endif

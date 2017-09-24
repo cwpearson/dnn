@@ -1,0 +1,20 @@
+#ifndef RELU_HU
+#define RELU_HU
+
+// Collaborative threadblock relu forward pass
+__device__ void block_relu_forward(float *out, const float *in,
+                                   const int size) {
+  for (int i = threadIdx.x; i < size; i += blockDim.x) {
+    out[i] = in[i] * (in[i] > 0 ? 1 : 0.01);
+  }
+}
+
+// dE/dx = dE/dy * dy/dx
+__device__ void block_relu_backward(float *dx, const float *dy, const float *y,
+                                    const int size) {
+  for (int i = threadIdx.x; i < size; i += blockDim.x) {
+    dx[i] = dy[i] * (y[i] > 0 ? 1 : 0.01);
+  }
+}
+
+#endif
