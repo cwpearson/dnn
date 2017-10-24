@@ -17,4 +17,27 @@ __device__ void block_relu_backward(float *dx, const float *dy, const float *y,
   }
 }
 
+class ReluOp {
+public:
+  float *x_h;
+  float *x_d;
+  float *y_h;
+  float *y_d;
+  float *dy_h;
+  float *dy_d;
+
+  ReluOp(const float *hostIn, *deviceIn) : x_h(hostIn), x_d(deviceIn) {
+    y_h = nullptr;
+    y_d = nullptr;
+    dy_h = nullptr;
+    dy_d = nullptr;
+  }
+
+  void allocate(const size_t size) {
+
+  }
+private:
+
+};
+
 #endif

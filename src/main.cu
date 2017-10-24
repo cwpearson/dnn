@@ -10,10 +10,12 @@
 #include "mnist.hpp"
 
 const float rate = 0.1;
-const int numEpochs = 5;
-const int trainSize = 600;
+const int numEpochs = 500;
+const int trainSize = 6000;
 const int testSize = 100;
 const int numSMs = 10;
+const int minibatchSize = 10;
+const bool useTrainForTest = false;
 
 __device__ void block_output_backward(float *errorOut, const float *networkOut,
                                       const int expected, const size_t size) {
@@ -170,10 +172,20 @@ int main(void) {
   float *mnistTestData, *mnistTrainData;
   int *mnistTestLabels, *mnistTrainLabels;
   int mnistNumTestImages, mnistNumTrainImages;
+
   assert(load_mnist_train(&mnistTrainData, &mnistTrainLabels,
-                          &mnistNumTrainImages));
-  assert(
-      load_mnist_test(&mnistTestData, &mnistTestLabels, &mnistNumTestImages));
+    &mnistNumTrainImages));
+
+  // Load separate test data, or reuse train data
+  if (useTrainForTest) {
+    mnistTestData = mnistTrainData;
+    mnistTestLabels = mnistTrainLabels;
+    mnistNumTestImages = mnistNumTrainImages;
+  } else {
+    assert(
+        load_mnist_test(&mnistTestData, &mnistTestLabels, &mnistNumTestImages));
+  }
+
 
   if (trainSize < mnistNumTrainImages) {
     mnistNumTrainImages = trainSize;
@@ -181,6 +193,8 @@ int main(void) {
   if (testSize < mnistNumTestImages) {
     mnistNumTestImages = testSize;
   }
+
+
 
   printf("Using %d training images\n", mnistNumTrainImages);
   printf("Using %d test images\n", mnistNumTestImages);
@@ -246,7 +260,7 @@ int main(void) {
   CUDA_RUNTIME_CHECK(
       cudaMemcpy(fc3_b_d, fc3_b_h, 10 * sizeof(float), cudaMemcpyHostToDevice));
 
-  // Anything update by the device needs space per trainer
+  // Anything updated by the device needs space per trainer
   float *fc1_y_d;                        // device layer output
   float *fc1_dw_d, *fc1_db_d, *fc1_dy_d; // gradients
 
@@ -339,6 +353,7 @@ int main(void) {
     zero_kernel<<<numSMs, blockDim>>>(fc2_db_d, numSMs * 100);
     zero_kernel<<<numSMs, blockDim>>>(fc3_dw_d, numSMs * 10 * 100);
     zero_kernel<<<numSMs, blockDim>>>(fc3_db_d, numSMs * 10);
+    CUDA_RUNTIME_CHECK(cudaDeviceSynchronize());
 
     train_kernel<<<gridDim, blockDim>>>(
         fc1_dw_d, fc1_db_d, fc1_dy_d, r1_dy_d, fc2_dw_d, fc2_db_d, fc2_dy_d,
@@ -347,6 +362,11 @@ int main(void) {
         fc3_w_d, fc3_b_d, imgTrain_d, labelTrain_d, mnistNumTrainImages);
 
     CUDA_RUNTIME_CHECK(cudaDeviceSynchronize());
+
+    // apply weight updates on the device
+    for (int i = 0; i < numSMs; ++i) {
+      vector_add_kernel<<<gridDim, blockDim>>>(fc1_w_d, &fc1_dw_d[i * 784 * 1200], 784 * 1200);
+    }
 
     // copy weight updates back to host
     CUDA_RUNTIME_CHECK(cudaMemcpy(fc1_dw_h, fc1_dw_d,

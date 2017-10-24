@@ -2,10 +2,12 @@
 CXX = g++
 CUDA_ROOT ?= /usr/local/cuda
 NVCC ?= $(CUDA_ROOT)/bin/nvcc -ccbin=$(CXX)
-NVCCFLAGS = -O2 -arch=sm_20
+
+NVCCFLAGS = -O2 -arch=sm_30 -Xcompiler -Wall,-Wextra,-Wshadow,-isystem$(CUDA_ROOT)/include
+
 # CXXFLAGS = -g -O0
-CXXFLAGS = -O2 
-CXXFLAGS += -I$(CUDA_ROOT)/include
+CXXFLAGS = -O2 -Wall -Wextra -Wshadow -Wpedantic
+CXXFLAGS += -isystem$(CUDA_ROOT)/include
 
 
 # Where to place outputs
