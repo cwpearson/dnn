@@ -52,6 +52,13 @@ __global__ void network_forward_kernel(float *fc1_y, float *r1_y, float *fc2_y,
                         fc2_w, fc2_b, fc3_w, fc3_b, img);
 }
 
+__global__ void elemwise_plus_equal(float *dst, const float *src, const float alpha, const int size) {
+  const int t = blockIdx.x * blockDim.x + threadIdx.x;
+  for (int i = t; i < size; i += gridDim.x * blockDim.x) {
+    dst[i] += alpha * src[i];
+  }
+}
+
 __device__ void block_zero_floats(float *x, const int size) {
   for (int i = threadIdx.x; i < size; i += blockDim.x) {
     x[i] = 0.0f;
@@ -365,13 +372,13 @@ int main(void) {
 
     // apply weight updates on the device
     for (int i = 0; i < numSMs; ++i) {
-      vector_add_kernel<<<gridDim, blockDim>>>(fc1_w_d, &fc1_dw_d[i * 784 * 1200], 784 * 1200);
+      elemwise_plus_equal<<<10, 512>>>(fc1_w_d, &fc1_dw_d[i * 784 * 1200], rate / mnistNumTrainImages, 784 * 1200);
     }
 
     // copy weight updates back to host
-    CUDA_RUNTIME_CHECK(cudaMemcpy(fc1_dw_h, fc1_dw_d,
-                                  numSMs * 784 * 1200 * sizeof(float),
-                                  cudaMemcpyDeviceToHost));
+    // CUDA_RUNTIME_CHECK(cudaMemcpy(fc1_dw_h, fc1_dw_d,
+    //                               numSMs * 784 * 1200 * sizeof(float),
+    //                               cudaMemcpyDeviceToHost));
     CUDA_RUNTIME_CHECK(cudaMemcpy(fc1_db_h, fc1_db_d,
                                   numSMs * 1200 * sizeof(float),
                                   cudaMemcpyDeviceToHost));
@@ -391,9 +398,9 @@ int main(void) {
     // Apply weight updates
 
     for (size_t i = 0; i < numSMs; ++i) {
-      for (size_t j = 0; j < 1200 * 784; ++j) {
-        fc1_w_h[j] -= fc1_dw_h[i * 1200 * 784 + j] * rate / mnistNumTrainImages;
-      }
+      // for (size_t j = 0; j < 1200 * 784; ++j) {
+      //   fc1_w_h[j] -= fc1_dw_h[i * 1200 * 784 + j] * rate / mnistNumTrainImages;
+      // }
       for (size_t j = 0; j < 1200; ++j) {
         fc1_b_h[j] -= fc1_db_h[i * 1200 + j] * rate / mnistNumTrainImages;
       }
