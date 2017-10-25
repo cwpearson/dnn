@@ -9,16 +9,18 @@
 #include "layer/softmax.hu"
 #include "mnist.hpp"
 
-const float rate = 0.1;
-const int numEpochs = 500;
-const int trainSize = 6000;
-const int testSize = 100;
-const int numSMs = 10;
+const float rate = 0.2;
+const int numEpochs = 10000;
+const int trainSize = 60000;
+const int testSize = 10000;
+const int numSMs = 120;
 const int minibatchSize = 10;
 const bool useTrainForTest = false;
 
 __device__ void block_output_backward(float *errorOut, const float *networkOut,
                                       const int expected, const size_t size) {
+
+  // log/liklihood and softmax error
   for (int o = threadIdx.x; o < size; o += blockDim.x) {
     if (o == expected) {
       errorOut[o] = networkOut[o] - 1;
@@ -370,67 +372,38 @@ int main(void) {
 
     CUDA_RUNTIME_CHECK(cudaDeviceSynchronize());
 
-    // apply weight updates on the device
-    for (int i = 0; i < numSMs; ++i) {
-      elemwise_plus_equal<<<10, 512>>>(fc1_w_d, &fc1_dw_d[i * 784 * 1200], rate / mnistNumTrainImages, 784 * 1200);
-    }
-
-    // copy weight updates back to host
-    // CUDA_RUNTIME_CHECK(cudaMemcpy(fc1_dw_h, fc1_dw_d,
-    //                               numSMs * 784 * 1200 * sizeof(float),
-    //                               cudaMemcpyDeviceToHost));
-    CUDA_RUNTIME_CHECK(cudaMemcpy(fc1_db_h, fc1_db_d,
-                                  numSMs * 1200 * sizeof(float),
-                                  cudaMemcpyDeviceToHost));
-    CUDA_RUNTIME_CHECK(cudaMemcpy(fc2_dw_h, fc2_dw_d,
-                                  numSMs * 1200 * 100 * sizeof(float),
-                                  cudaMemcpyDeviceToHost));
-    CUDA_RUNTIME_CHECK(cudaMemcpy(fc2_db_h, fc2_db_d,
-                                  numSMs * 100 * sizeof(float),
-                                  cudaMemcpyDeviceToHost));
-    CUDA_RUNTIME_CHECK(cudaMemcpy(fc3_dw_h, fc3_dw_d,
-                                  numSMs * 100 * 10 * sizeof(float),
-                                  cudaMemcpyDeviceToHost));
-    CUDA_RUNTIME_CHECK(cudaMemcpy(fc3_db_h, fc3_db_d,
-                                  numSMs * 10 * sizeof(float),
-                                  cudaMemcpyDeviceToHost));
 
     // Apply weight updates
 
+    const float alpha = -1 * rate / mnistNumTrainImages;
     for (size_t i = 0; i < numSMs; ++i) {
       // for (size_t j = 0; j < 1200 * 784; ++j) {
       //   fc1_w_h[j] -= fc1_dw_h[i * 1200 * 784 + j] * rate / mnistNumTrainImages;
       // }
-      for (size_t j = 0; j < 1200; ++j) {
-        fc1_b_h[j] -= fc1_db_h[i * 1200 + j] * rate / mnistNumTrainImages;
-      }
-      for (size_t j = 0; j < 100 * 1200; ++j) {
-        fc2_w_h[j] -= fc2_dw_h[i * 100 * 1200 + j] * rate / mnistNumTrainImages;
-      }
-      for (size_t j = 0; j < 100; ++j) {
-        fc2_b_h[j] -= fc2_db_h[i * 100 + j] * rate / mnistNumTrainImages;
-      }
-      for (size_t j = 0; j < 10 * 100; ++j) {
-        fc3_w_h[j] -= fc3_dw_h[i * 10 * 100 + j] * rate / mnistNumTrainImages;
-      }
-      for (size_t j = 0; j < 10; ++j) {
-        fc3_b_h[j] -= fc3_db_h[i * 10 + j] * rate / mnistNumTrainImages;
-      }
+      elemwise_plus_equal<<<10, 512>>>(fc1_w_d, &fc1_dw_d[i * 784 * 1200], alpha, 784 * 1200);
+      // for (size_t j = 0; j < 1200; ++j) {
+      //   fc1_b_h[j] -= fc1_db_h[i * 1200 + j] * rate / mnistNumTrainImages;
+      // }
+      elemwise_plus_equal<<<10, 512>>>(fc1_b_d, &fc1_db_d[i * 1200], alpha, 1200);
+      // for (size_t j = 0; j < 100 * 1200; ++j) {
+      //   fc2_w_h[j] -= fc2_dw_h[i * 100 * 1200 + j] * rate / mnistNumTrainImages;
+      // }
+      elemwise_plus_equal<<<10, 512>>>(fc2_w_d, &fc2_dw_d[i * 1200 * 100], alpha, 1200 * 100);
+      // for (size_t j = 0; j < 100; ++j) {
+      //   fc2_b_h[j] -= fc2_db_h[i * 100 + j] * rate / mnistNumTrainImages;
+      // }
+      elemwise_plus_equal<<<10, 512>>>(fc2_b_d, &fc2_db_d[i * 100], alpha, 100);
+      // for (size_t j = 0; j < 10 * 100; ++j) {
+      //   fc3_w_h[j] -= fc3_dw_h[i * 10 * 100 + j] * rate / mnistNumTrainImages;
+      // }
+      elemwise_plus_equal<<<10, 100>>>(fc3_w_d, &fc3_dw_d[i * 10 * 100], alpha, 10 * 100);
+      // for (size_t j = 0; j < 10; ++j) {
+      //   fc3_b_h[j] -= fc3_db_h[i * 10 + j] * rate / mnistNumTrainImages;
+      // }
+      elemwise_plus_equal<<<10, 512>>>(fc3_b_d, &fc3_db_d[i * 10], alpha, 10);
     }
 
-    // Send weights back to GPU
-    CUDA_RUNTIME_CHECK(cudaMemcpy(fc1_w_d, fc1_w_h, 784 * 1200 * sizeof(float),
-                                  cudaMemcpyHostToDevice));
-    CUDA_RUNTIME_CHECK(cudaMemcpy(fc1_b_d, fc1_b_h, 1200 * sizeof(float),
-                                  cudaMemcpyHostToDevice));
-    CUDA_RUNTIME_CHECK(cudaMemcpy(fc2_w_d, fc2_w_h, 1200 * 100 * sizeof(float),
-                                  cudaMemcpyHostToDevice));
-    CUDA_RUNTIME_CHECK(cudaMemcpy(fc2_b_d, fc2_b_h, 100 * sizeof(float),
-                                  cudaMemcpyHostToDevice));
-    CUDA_RUNTIME_CHECK(cudaMemcpy(fc3_w_d, fc3_w_h, 100 * 10 * sizeof(float),
-                                  cudaMemcpyHostToDevice));
-    CUDA_RUNTIME_CHECK(cudaMemcpy(fc3_b_d, fc3_b_h, 10 * sizeof(float),
-                                  cudaMemcpyHostToDevice));
+
   }
 
   return 0;

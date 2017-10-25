@@ -27,7 +27,8 @@ __device__ void block_softmax_forward(float *y, const float *x,
 // dE/dx = dE/dy * dy/dx
 __device__ void block_softmax_backward(float *dx, const float *dy,
                                        const float *y, const int size) {
-  if (threadIdx.x == 0) {
+
+
     // for (int i = 0; i < size; ++i) {
     //   float acc = 0;
     //   for (int o = 0; o < size; ++o) {
@@ -40,10 +41,10 @@ __device__ void block_softmax_backward(float *dx, const float *dy,
     //   }
     //   dx[i] = dy[i] * acc;
     // }
-    for (int i = 0; i < size; ++i) {
+    for (int i = threadIdx.x; i < size; i += blockDim.x) {
       dx[i] = dy[i];
     }
-  }
+
 }
 
 #endif
