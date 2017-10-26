@@ -4,6 +4,7 @@
 #include <math_constants.h>
 
 #include "cuda_runtime_check.hpp"
+#include "blas/saxpy.hu"
 #include "layer/fc.hu"
 #include "layer/sigmoid.hu"
 #include "layer/softmax.hu"
@@ -14,7 +15,7 @@ const int numEpochs = 10000;
 const int trainSize = 60000;
 const int testSize = 10000;
 const int numSMs = 120;
-const int minibatchSize = 10;
+const int maxBatchSize = 10;
 const bool useTrainForTest = false;
 const int cudaDevice = 0;
 
@@ -31,7 +32,7 @@ __device__ void block_output_backward(float *errorOut, const float *networkOut,
   }
 }
 
-__device__ void block_network_forward(float *fc1_y, float *r1_y, float *fc2_y,
+__device__ void network_forward_block(float *fc1_y, float *r1_y, float *fc2_y,
                                       float *r2_y, float *fc3_y, float *s1_y,
                                       const float *fc1_w, const float *fc1_b,
                                       const float *fc2_w, const float *fc2_b,
@@ -45,30 +46,25 @@ __device__ void block_network_forward(float *fc1_y, float *r1_y, float *fc2_y,
   block_softmax_forward(s1_y, fc3_y, 10);
 }
 
+
+
 __global__ void network_forward_kernel(float *fc1_y, float *r1_y, float *fc2_y,
                                        float *r2_y, float *fc3_y, float *s1_y,
                                        const float *fc1_w, const float *fc1_b,
                                        const float *fc2_w, const float *fc2_b,
                                        const float *fc3_w, const float *fc3_b,
                                        const float *img) {
-  block_network_forward(fc1_y, r1_y, fc2_y, r2_y, fc3_y, s1_y, fc1_w, fc1_b,
+  network_forward_block(fc1_y, r1_y, fc2_y, r2_y, fc3_y, s1_y, fc1_w, fc1_b,
                         fc2_w, fc2_b, fc3_w, fc3_b, img);
 }
 
-__global__ void elemwise_plus_equal(float *dst, const float *src, const float alpha, const int size) {
-  const int t = blockIdx.x * blockDim.x + threadIdx.x;
-  for (int i = t; i < size; i += gridDim.x * blockDim.x) {
-    dst[i] += alpha * src[i];
-  }
-}
-
-__device__ void block_zero_floats(float *x, const int size) {
+__device__ void zero_block(float *x, const int size) {
   for (int i = threadIdx.x; i < size; i += blockDim.x) {
     x[i] = 0.0f;
   }
 }
 
-__global__ void zero_kernel(float *x, const int size) {
+__global__ void zero_grid(float *x, const int size) {
   const int t = blockIdx.x * blockDim.x + threadIdx.x;
   for (int i = t; i < size; i += gridDim.x * blockDim.x) {
     x[i] = 0.0f;
@@ -113,14 +109,6 @@ train_kernel(float *fc1_dw, float *fc1_db, float *fc1_dy, float *r1_dy,
   fc3_dy = &fc3_dy[trainerIdx * 10];
   s1_dy = &s1_dy[trainerIdx * 10];
 
-  // zero out gradients before accumulation in train_kernel
-  // block_zero_floats(fc1_dw, 1200 * 784);
-  // block_zero_floats(fc1_db, 1200);
-  // block_zero_floats(fc2_dw, 100 * 1200);
-  // block_zero_floats(fc2_db, 100);
-  // block_zero_floats(fc3_dw, 10 * 100);
-  // block_zero_floats(fc3_db, 10);
-
   // Split up the images per SM
   const int imgsPerLearner = numImages / gridDim.x;
   // some images won't be covered by this division
@@ -133,12 +121,10 @@ train_kernel(float *fc1_dw, float *fc1_db, float *fc1_dy, float *r1_dy,
       imgsPerLearner * trainerIdx + min(trainerIdx, numLeftover);
   const int imgIdxEnd = imgIdxStart + myNumImages;
 
-  // const int imgIdxEnd =
-  //     max(numImages, numImages / gridDim.x * (blockIdx.x + 1));
   for (int imgIdx = imgIdxStart; imgIdx < imgIdxEnd; ++imgIdx) {
 
     // Have SM collaboratively compute outputs for forward pass
-    block_network_forward(fc1_y, r1_y, fc2_y, r2_y, fc3_y, s1_y, fc1_w, fc1_b,
+    network_forward_block(fc1_y, r1_y, fc2_y, r2_y, fc3_y, s1_y, fc1_w, fc1_b,
                           fc2_w, fc2_b, fc3_w, fc3_b, &img[imgIdx * 784]);
 
     // compute error of final layer
@@ -177,6 +163,8 @@ int argmax(const float *x, const int size) {
 }
 
 int main(void) {
+
+  printf("Using batch size: %d\n", maxBatchSize);
 
   // Read the input data
   float *mnistTestData, *mnistTrainData;
@@ -353,13 +341,21 @@ int main(void) {
     printf("%d %f %f\n", epoch, error / mnistNumTestImages,
            float(numWrong) / mnistNumTestImages);
 
+    for (int batchStart = 0; batchStart < mnistNumTestImages; batchStart += maxBatchSize) {
+      const int batchEnd = min(mnistNumTestImages, batchStart + maxBatchSize);
+      const int batchSize = batchEnd - batchStart;
+
+      const float *imgTrainBatch_d = &imgTrain_d[batchStart * 784];
+      printf("batchStart = %d\n", batchStart);
+    }
+
     // zero out gradient updates before training
-    zero_kernel<<<numSMs, blockDim>>>(fc1_dw_d, numSMs * 1200 * 784);
-    zero_kernel<<<numSMs, blockDim>>>(fc1_db_d, numSMs * 1200);
-    zero_kernel<<<numSMs, blockDim>>>(fc2_dw_d, numSMs * 100 * 1200);
-    zero_kernel<<<numSMs, blockDim>>>(fc2_db_d, numSMs * 100);
-    zero_kernel<<<numSMs, blockDim>>>(fc3_dw_d, numSMs * 10 * 100);
-    zero_kernel<<<numSMs, blockDim>>>(fc3_db_d, numSMs * 10);
+    zero_grid<<<numSMs, blockDim>>>(fc1_dw_d, numSMs * 1200 * 784);
+    zero_grid<<<numSMs, blockDim>>>(fc1_db_d, numSMs * 1200);
+    zero_grid<<<numSMs, blockDim>>>(fc2_dw_d, numSMs * 100 * 1200);
+    zero_grid<<<numSMs, blockDim>>>(fc2_db_d, numSMs * 100);
+    zero_grid<<<numSMs, blockDim>>>(fc3_dw_d, numSMs * 10 * 100);
+    zero_grid<<<numSMs, blockDim>>>(fc3_db_d, numSMs * 10);
     CUDA_RUNTIME_CHECK(cudaDeviceSynchronize());
 
     train_kernel<<<gridDim, blockDim>>>(
@@ -372,15 +368,14 @@ int main(void) {
 
 
     // Apply weight updates
-
     const float alpha = -1 * rate / mnistNumTrainImages;
     for (size_t i = 0; i < numSMs; ++i) {
-      elemwise_plus_equal<<<10, 512>>>(fc1_w_d, &fc1_dw_d[i * 784 * 1200], alpha, 784 * 1200);
-      elemwise_plus_equal<<<10, 512>>>(fc1_b_d, &fc1_db_d[i * 1200], alpha, 1200);
-      elemwise_plus_equal<<<10, 512>>>(fc2_w_d, &fc2_dw_d[i * 1200 * 100], alpha, 1200 * 100);
-      elemwise_plus_equal<<<10, 512>>>(fc2_b_d, &fc2_db_d[i * 100], alpha, 100);
-      elemwise_plus_equal<<<10, 100>>>(fc3_w_d, &fc3_dw_d[i * 10 * 100], alpha, 10 * 100);
-      elemwise_plus_equal<<<10, 512>>>(fc3_b_d, &fc3_db_d[i * 10], alpha, 10);
+      saxpy_grid<<<(784 * 1200 + 255) / 256, 256>>>(fc1_w_d, &fc1_dw_d[i * 784 * 1200], alpha, 784 * 1200);
+      saxpy_grid<<<(1200 + 255) / 256, 256>>>(fc1_b_d, &fc1_db_d[i * 1200], alpha, 1200);
+      saxpy_grid<<<(1200 * 100 + 255) / 256, 256>>>(fc2_w_d, &fc2_dw_d[i * 1200 * 100], alpha, 1200 * 100);
+      saxpy_grid<<<(100 + 31) / 32, 32>>>(fc2_b_d, &fc2_db_d[i * 100], alpha, 100);
+      saxpy_grid<<<(10 * 100 + 127) / 128, 128>>>(fc3_w_d, &fc3_dw_d[i * 10 * 100], alpha, 10 * 100);
+      saxpy_grid<<<1, 32>>>(fc3_b_d, &fc3_db_d[i * 10], alpha, 10);
     }
 
 
