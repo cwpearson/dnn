@@ -1,0 +1,9 @@
+#ifndef SAXPY_HU
+#define SAXPY_HU
+
+__global__ void saxpy(float * restrict y, const float *x, const float a,  const size_t size) {
+  for (int i = blockIdx.x * blockDim.x + threadIdx.x; i < size; i += gridDim.x * blockDim.x)
+      y[i] = a * x[i] + y[i];
+}
+
+#endif

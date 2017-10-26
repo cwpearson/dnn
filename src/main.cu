@@ -16,6 +16,7 @@ const int testSize = 10000;
 const int numSMs = 120;
 const int minibatchSize = 10;
 const bool useTrainForTest = false;
+const int cudaDevice = 0;
 
 __device__ void block_output_backward(float *errorOut, const float *networkOut,
                                       const int expected, const size_t size) {
@@ -195,7 +196,7 @@ int main(void) {
         load_mnist_test(&mnistTestData, &mnistTestLabels, &mnistNumTestImages));
   }
 
-
+  // Reduce the training and test size, if desired
   if (trainSize < mnistNumTrainImages) {
     mnistNumTrainImages = trainSize;
   }
@@ -204,13 +205,10 @@ int main(void) {
   }
 
 
-
   printf("Using %d training images\n", mnistNumTrainImages);
   printf("Using %d test images\n", mnistNumTestImages);
 
-  // Set the CUDA device
-  int device = 0;
-  CUDA_RUNTIME_CHECK(cudaSetDevice(device));
+  CUDA_RUNTIME_CHECK(cudaSetDevice(cudaDevice));
 
   // Configure the number of learners
   printf("Using %d learners\n", numSMs);
@@ -377,29 +375,11 @@ int main(void) {
 
     const float alpha = -1 * rate / mnistNumTrainImages;
     for (size_t i = 0; i < numSMs; ++i) {
-      // for (size_t j = 0; j < 1200 * 784; ++j) {
-      //   fc1_w_h[j] -= fc1_dw_h[i * 1200 * 784 + j] * rate / mnistNumTrainImages;
-      // }
       elemwise_plus_equal<<<10, 512>>>(fc1_w_d, &fc1_dw_d[i * 784 * 1200], alpha, 784 * 1200);
-      // for (size_t j = 0; j < 1200; ++j) {
-      //   fc1_b_h[j] -= fc1_db_h[i * 1200 + j] * rate / mnistNumTrainImages;
-      // }
       elemwise_plus_equal<<<10, 512>>>(fc1_b_d, &fc1_db_d[i * 1200], alpha, 1200);
-      // for (size_t j = 0; j < 100 * 1200; ++j) {
-      //   fc2_w_h[j] -= fc2_dw_h[i * 100 * 1200 + j] * rate / mnistNumTrainImages;
-      // }
       elemwise_plus_equal<<<10, 512>>>(fc2_w_d, &fc2_dw_d[i * 1200 * 100], alpha, 1200 * 100);
-      // for (size_t j = 0; j < 100; ++j) {
-      //   fc2_b_h[j] -= fc2_db_h[i * 100 + j] * rate / mnistNumTrainImages;
-      // }
       elemwise_plus_equal<<<10, 512>>>(fc2_b_d, &fc2_db_d[i * 100], alpha, 100);
-      // for (size_t j = 0; j < 10 * 100; ++j) {
-      //   fc3_w_h[j] -= fc3_dw_h[i * 10 * 100 + j] * rate / mnistNumTrainImages;
-      // }
       elemwise_plus_equal<<<10, 100>>>(fc3_w_d, &fc3_dw_d[i * 10 * 100], alpha, 10 * 100);
-      // for (size_t j = 0; j < 10; ++j) {
-      //   fc3_b_h[j] -= fc3_db_h[i * 10 + j] * rate / mnistNumTrainImages;
-      // }
       elemwise_plus_equal<<<10, 512>>>(fc3_b_d, &fc3_db_d[i * 10], alpha, 10);
     }
 
