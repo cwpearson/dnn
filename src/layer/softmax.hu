@@ -1,6 +1,7 @@
 #ifndef SOFTMAX_HU
 #define SOFTMAX_HU
 
+
 __device__ void block_softmax_forward(float *y, const float *x,
                                       const int size) {
 
@@ -24,7 +25,40 @@ __device__ void block_softmax_forward(float *y, const float *x,
   }
 }
 
+__device__ void block_softmax_forward_batch_block(float *y, const float *x,
+  const int size, const int batchSize) {
+
+  #define X(b, i) (x[b * size + i])
+  #define Y(b, i) (y[b * size + i])
+  __shared__ float acc, maxVal;
+  for (int b = 0; b < batchSize; ++b) {
+    if (threadIdx.x == 0) {
+      maxVal = -1 * CUDART_INF_F;
+      for (int i = 0; i < size; ++i) {
+        if (X(b, i) > maxVal) {
+          maxVal = X(b, i);
+        }
+      }
+    
+      acc = 0;
+      for (int i = 0; i < size; ++i) {
+        acc += exp(X(b, i) - maxVal);
+      }
+    }
+    
+    __syncthreads();
+    for (int i = threadIdx.x; i < size; i += blockDim.x) {
+      Y(b, i) = exp(X(b, i) - maxVal) / acc;
+    }
+  }
+
+  #undef X
+  #undef Y
+}
+
+
 // dE/dx = dE/dy * dy/dx
+// the error propagation of this is handled by the output error in main.cu
 __device__ void block_softmax_backward(float *dx, const float *dy,
                                        const float *y, const int size) {
 
@@ -44,7 +78,22 @@ __device__ void block_softmax_backward(float *dx, const float *dy,
     for (int i = threadIdx.x; i < size; i += blockDim.x) {
       dx[i] = dy[i];
     }
+}
 
+// dE/dx = dE/dy * dy/dx
+// the error propagation of this is handled by the output error in main.cu
+__device__ void softmax_backward_batch_block(float *dx, const float *dy,
+  const float *y, const int size, const int batchSize) {
+
+  #define DX(b, i) (dx[b * size + i])
+  #define DY(b, i) (dy[b * size + i])
+  for (int b = 0; b < batchSize; ++b) {
+    for (int i = threadIdx.x; i < size; i += blockDim.x) {
+      DX(b,i) = DY(b, i);
+    }
+  }
+  #undef DX
+  #undef DY
 }
 
 #endif
