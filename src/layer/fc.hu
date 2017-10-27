@@ -113,9 +113,10 @@ __device__ void fc_backward_block_batch(float *dx /* input gradient */,
       }
     }
   }
-  
+
   #undef X
   #undef Y
+  #undef DX
   #undef DY
   #undef DW
   #undef DB
