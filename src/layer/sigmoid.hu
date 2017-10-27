@@ -11,12 +11,44 @@ __device__ void block_sigmoid_forward(float *y, const float *x,
   }
 }
 
+__device__ void sigmoid_forward_batch_block(float *y, const float *x,
+  const int size, const int batchSize) {
+
+  #define X(b, i) (x[b * size + i])
+  #define Y(b, i) (y[b * size + i])
+  for (int b = 0; b < batchSize; ++b) {
+    for (int i = threadIdx.x; i < size; i += blockDim.x) {
+      Y(b, i) = sigmoid(X(b, i));
+    }
+  }
+  #undef X
+  #undef Y
+}
+
 // dE/dx = dE/dy * dy/dx
 __device__ void block_sigmoid_backward(float *dx, const float *dy,
                                        const float *y, const int size) {
   for (int i = threadIdx.x; i < size; i += blockDim.x) {
     dx[i] = dy[i] * y[i] * (1.0f - y[i]);
   }
+}
+
+// dE/dx = dE/dy * dy/dx
+__device__ void sigmoid_backward_batch_block(float *dx, const float *dy,
+  const float *y, const int size, const int batchSize) {
+  #define X(b, i) (x[b * size + i])
+  #define Y(b, i) (y[b * size + i])
+  #define DY(b, i) (dy[b * size + i])
+  #define DX(b, i) (dx[b * size + i])
+  for (int b = 0; b < batchSize; ++b) {
+    for (int i = threadIdx.x; i < size; i += blockDim.x) {
+      DX(b, i) = DY(b,i) * Y(b,i) * (1.0f - Y(b, i));
+    }
+  }
+  #undef X
+  #undef Y
+  #undef DY
+  #undef DX
 }
 
 #endif
