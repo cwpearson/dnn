@@ -2,7 +2,6 @@
 #define FC_HU
 
 // Collaborative threadblock fully-connected layer forward pass
-// A matmul
 __device__ void block_fc_forward(float *y, const float *x, const float *weight,
                                  const float *bias, const int outSize,
                                  const int inSize) {
@@ -13,6 +12,24 @@ __device__ void block_fc_forward(float *y, const float *x, const float *weight,
     }
     y[o] = acc + bias[o];
   }
+}
+
+__device__ void fc_forward_batch_block(float *y, const float *x, const float *weight,
+  const float *bias, const int outSize, const int inSize, const int batchSize) {
+
+  #define Y(b, o) (y[b * outSize + o])
+  #define X(b, i) (x[b * inSize + i])
+  for (int b = 0; b < batchSize; ++b) {
+    for (int o = threadIdx.x; o < outSize; o += blockDim.x) {
+      float acc = 0;
+      for (int i = 0; i < inSize; ++i) {
+        acc += X(b, i) * weight[i * outSize + o];
+      }
+      Y(b,o) = acc + bias[o];
+    }
+  }
+  #undef Y
+  #undef X
 }
 
 __device__ void block_fc_backward(float *dx /* input gradient */,
@@ -48,6 +65,60 @@ __device__ void block_fc_backward(float *dx /* input gradient */,
       dx[i] = acc;
     }
   }
+}
+
+__device__ void fc_backward_block_batch(float *dx /* input gradient */,
+  float *dw /* weight gradient */,
+  float *db /* bias gradient */,
+  const float *dy /*gradient at output*/,
+  const float *x, const float *weight,
+  const float *bias, const int outSize,
+  const int inSize, const int batchSize) {
+
+  #define X(b, i) (x[b * inSize + i])
+  #define Y(b, o) (y[b * outSize + o])
+  #define DX(b,i) (dx[b * inSize + i])
+  #define DY(b,j) (dy[b * outSize + j])
+  #define DW(b, i, j) (dw[b * (outSize * inSize) + i * outSize + j])
+  #define DB(b, o) (db[b * outSize + o])
+
+  // dW (compute weight update)
+  // dE/dw = dE/dy * dy/dw = dE/dy * x
+  for (int b = 0; b < batchSize; ++b) {
+    for (int i = 0; i < inSize; ++i) {
+      for (int j = threadIdx.x; j < outSize; j += blockDim.x) {
+        DW(b,i,j) += DY(b, j) * X(b, i);
+      }
+    }
+  }
+  
+  // db (compute bias update)
+  // dE/db = dE/dy * dy/db = dE/dy
+  for (int b = 0; b < batchSize; ++b) {
+    for (int o = threadIdx.x; o < outSize; o += blockDim.x) {
+      DB(b, o) += DY(b, o);
+    }
+  }
+  
+  // dX (backpropogate error)
+  // dE/dx = dE/dy * dy/dx = dE/dy * w
+  if (dx != 0) {
+    for (int b = 0; b < batchSize; ++b) {
+      for (int i = threadIdx.x; i < inSize; i += blockDim.x) {
+        float acc = 0;
+        for (int j = 0; j < outSize; ++j) {
+          acc += weight[i * outSize + j] * DY(b, j);
+        }
+        DX(b, i) = acc;
+      }
+    }
+  }
+  
+  #undef X
+  #undef Y
+  #undef DY
+  #undef DW
+  #undef DB
 }
 
 #endif
