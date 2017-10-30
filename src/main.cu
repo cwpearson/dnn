@@ -19,6 +19,19 @@ const int maxBatchSize = 10;
 const bool useTrainForTest = false;
 const int cudaDevice = 0;
 
+void *cudaMalloc3D(const size_t elemSize, const size_t d1, const size_t d2, const size_t d3) {
+  void *p;
+  CUDA_RUNTIME_CHECK(cudaMalloc(&p, elemSize * d1 * d2 * d3));
+  return p;
+}
+void *cudaMalloc4D(const size_t elemSize, const size_t d1, const size_t d2, const size_t d3, const size_t d4) {
+  void *p;
+  CUDA_RUNTIME_CHECK(cudaMalloc(&p, elemSize * d1 * d2 * d3 * d4));
+  return p;
+}
+
+#define Array3D(_ptr, _i, _j, _k, _d_i, _d_j) (_ptr[_i * (_d_i * _d_j) + _j * _d_j + _k])
+
 __device__ void block_output_backward(float *errorOut, const float *networkOut,
                                       const int expected, const size_t size) {
 
@@ -46,7 +59,29 @@ __device__ void network_forward_block(float *fc1_y, float *r1_y, float *fc2_y,
   block_softmax_forward(s1_y, fc3_y, 10);
 }
 
+__device__ void network_forward_batch_block(float *fc1_y, float *r1_y, float *fc2_y,
+  float *r2_y, float *fc3_y, float *s1_y,
+  const float *fc1_w, const float *fc1_b,
+  const float *fc2_w, const float *fc2_b,
+  const float *fc3_w, const float *fc3_b,
+  const float *img, const size_t batchSize) {
+  fc_forward_batch_block(fc1_y, img, fc1_w, fc1_b, 1200, 784, batchSize);
+  sigmoid_forward_batch_block(r1_y, fc1_y, 1200, batchSize);
+  fc_forward_batch_block(fc2_y, r1_y, fc2_w, fc2_b, 100, 1200, batchSize);
+  sigmoid_forward_batch_block(r2_y, fc2_y, 100, batchSize);
+  fc_forward_batch_block(fc3_y, r2_y, fc3_w, fc3_b, 10, 100, batchSize);
+  softmax_forward_batch_block(s1_y, fc3_y, 10, batchSize);
+}
 
+__global__ void network_forward_batch_kernel(float *fc1_y, float *r1_y, float *fc2_y,
+  float *r2_y, float *fc3_y, float *s1_y,
+  const float *fc1_w, const float *fc1_b,
+  const float *fc2_w, const float *fc2_b,
+  const float *fc3_w, const float *fc3_b,
+  const float *img, const size_t batchSize) {
+  network_forward_batch_block(fc1_y, r1_y, fc2_y, r2_y, fc3_y, s1_y, fc1_w, fc1_b,
+                              fc2_w, fc2_b, fc3_w, fc3_b, img, batchSize);
+}
 
 __global__ void network_forward_kernel(float *fc1_y, float *r1_y, float *fc2_y,
                                        float *r2_y, float *fc3_y, float *s1_y,
@@ -255,63 +290,52 @@ int main(void) {
   CUDA_RUNTIME_CHECK(
       cudaMemcpy(fc3_b_d, fc3_b_h, 10 * sizeof(float), cudaMemcpyHostToDevice));
 
-  // Anything updated by the device needs space per trainer
-  float *fc1_y_d;                        // device layer output
-  float *fc1_dw_d, *fc1_db_d, *fc1_dy_d; // gradients
-
+  // Anything updated by the device needs space per trainer and per mini batch
   // one copy of gradients, output per trainer
   // FIXME - shared memory?
-  float *fc1_dw_h = new float[numSMs * 784 * 1200];
-  float *fc1_db_h = new float[numSMs * 1200];
-  float *fc1_dy_h = new float[numSMs * 1200];
-  float *fc1_y_h = new float[numSMs * 1200];
-  CUDA_RUNTIME_CHECK(
-      cudaMalloc(&fc1_dw_d, numSMs * 784 * 1200 * sizeof(float)));
-  CUDA_RUNTIME_CHECK(cudaMalloc(&fc1_db_d, numSMs * 1200 * sizeof(float)));
-  CUDA_RUNTIME_CHECK(cudaMalloc(&fc1_dy_d, numSMs * 1200 * sizeof(float)));
-  CUDA_RUNTIME_CHECK(cudaMalloc(&fc1_y_d, numSMs * 1200 * sizeof(float)));
+  float *fc1_dw_h = new float[maxBatchSize * numSMs * 784 * 1200];
+  float *fc1_db_h = new float[maxBatchSize * numSMs * 1200];
+  float *fc1_dy_h = new float[maxBatchSize * numSMs * 1200];
+  float *fc1_y_h  = new float[maxBatchSize * numSMs * 1200];
+  float *fc1_y_d = (float*) cudaMalloc4D(sizeof(float), numSMs, maxBatchSize, 784, 1200); // device layer output
+  float *fc1_dw_d = (float*) cudaMalloc4D(sizeof(float), numSMs, maxBatchSize, 784, 1200); // gradients
+  float *fc1_dy_d = (float*) cudaMalloc3D(sizeof(float), numSMs, maxBatchSize, 1200);
+  float *fc1_db_d = (float*) cudaMalloc3D(sizeof(float), numSMs, maxBatchSize, 1200);
 
   // relu outputs
-  float *r1_y_d, *r1_dy_d;
-  float *r1_dy_h = new float[numSMs * 1200 * sizeof(float)];
-  float *r1_y_h = new float[numSMs * 1200 * sizeof(float)];
-  CUDA_RUNTIME_CHECK(cudaMalloc(&r1_y_d, numSMs * 1200 * sizeof(float)));
-  CUDA_RUNTIME_CHECK(cudaMalloc(&r1_dy_d, numSMs * 1200 * sizeof(float)));
+  float *r1_dy_h = new float[maxBatchSize * numSMs * 1200 * sizeof(float)];
+  float *r1_y_h = new float[maxBatchSize * numSMs * 1200 * sizeof(float)];
+  float *r1_dy_d = (float*) cudaMalloc3D(sizeof(float), numSMs, maxBatchSize, 1200);
+  float *r1_y_d = (float*) cudaMalloc3D(sizeof(float), numSMs, maxBatchSize, 1200);
 
-  float *fc2_y_d;
-  float *fc2_dw_d, *fc2_db_d, *fc2_dy_d;
-  float *fc2_dw_h = new float[numSMs * 1200 * 100];
-  float *fc2_db_h = new float[numSMs * 100];
-  float *fc2_dy_h = new float[numSMs * 100];
-  float *fc2_y_h = new float[numSMs * 100];
-  CUDA_RUNTIME_CHECK(
-      cudaMalloc(&fc2_dw_d, numSMs * 1200 * 100 * sizeof(float)));
-  CUDA_RUNTIME_CHECK(cudaMalloc(&fc2_db_d, numSMs * 100 * sizeof(float)));
-  CUDA_RUNTIME_CHECK(cudaMalloc(&fc2_y_d, numSMs * 100 * sizeof(float)));
-  CUDA_RUNTIME_CHECK(cudaMalloc(&fc2_dy_d, numSMs * 100 * sizeof(float)));
+  // fc2 outputs
+  float *fc2_dw_d = (float*) cudaMalloc4D(sizeof(float), numSMs, maxBatchSize, 1200, 100);
+  float *fc2_db_d = (float*) cudaMalloc3D(sizeof(float), numSMs, maxBatchSize, 100);
+  float *fc2_dy_d = (float*) cudaMalloc3D(sizeof(float), numSMs, maxBatchSize, 100);
+  float *fc2_y_d  = (float*) cudaMalloc3D(sizeof(float), numSMs, maxBatchSize, 100);
+  float *fc2_dw_h = new float[maxBatchSize * numSMs * 1200 * 100];
+  float *fc2_db_h = new float[maxBatchSize * numSMs * 100];
+  float *fc2_dy_h = new float[maxBatchSize * numSMs * 100];
+  float *fc2_y_h =  new float[maxBatchSize * numSMs * 100];
 
-  float *r2_y_d, *r2_dy_d;
-  float *r2_dy_h = new float[numSMs * 100 * sizeof(float)];
-  float *r2_y_h = new float[numSMs * 100 * sizeof(float)];
-  CUDA_RUNTIME_CHECK(cudaMalloc(&r2_y_d, numSMs * 100 * sizeof(float)));
-  CUDA_RUNTIME_CHECK(cudaMalloc(&r2_dy_d, numSMs * 100 * sizeof(float)));
+  float *r2_dy_d = (float *) cudaMalloc3D(sizeof(float), numSMs, maxBatchSize, 100);
+  float *r2_y_d =  (float *) cudaMalloc3D(sizeof(float), numSMs, maxBatchSize, 100);
+  float *r2_dy_h = new float[maxBatchSize * numSMs * 100 * sizeof(float)];
+  float *r2_y_h =  new float[maxBatchSize * numSMs * 100 * sizeof(float)];
 
-  float *fc3_y_d;
-  float *fc3_dw_d, *fc3_db_d, *fc3_dy_d;
-  float *fc3_dw_h = new float[numSMs * 100 * 10];
-  float *fc3_db_h = new float[numSMs * 10];
-  float *fc3_dy_h = new float[numSMs * 10];
-  float *fc3_y_h = new float[numSMs * 10];
-  CUDA_RUNTIME_CHECK(cudaMalloc(&fc3_dw_d, numSMs * 100 * 10 * sizeof(float)));
-  CUDA_RUNTIME_CHECK(cudaMalloc(&fc3_db_d, numSMs * 10 * sizeof(float)));
-  CUDA_RUNTIME_CHECK(cudaMalloc(&fc3_y_d, numSMs * 10 * sizeof(float)));
-  CUDA_RUNTIME_CHECK(cudaMalloc(&fc3_dy_d, numSMs * 10 * sizeof(float)));
+  float *fc3_dw_d = (float*) cudaMalloc4D(sizeof(float), numSMs, maxBatchSize, 100, 10); 
+  float *fc3_db_d = (float*) cudaMalloc3D(sizeof(float), numSMs, maxBatchSize, 10); 
+  float *fc3_dy_d = (float*) cudaMalloc3D(sizeof(float), numSMs, maxBatchSize, 10);
+  float *fc3_y_d  = (float*) cudaMalloc3D(sizeof(float), numSMs, maxBatchSize, 10);
+  float *fc3_dw_h = new float[maxBatchSize * numSMs * 100 * 10];
+  float *fc3_db_h = new float[maxBatchSize * numSMs * 10];
+  float *fc3_dy_h = new float[maxBatchSize * numSMs * 10];
+  float *fc3_y_h =  new float[maxBatchSize * numSMs * 10];
 
-  float *s1_y_d, *s1_dy_d;
-  float *s1_y_h = new float[numSMs * 10];
-  float *s1_dy_h = new float[numSMs * 10];
-  CUDA_RUNTIME_CHECK(cudaMalloc(&s1_y_d, numSMs * 10 * sizeof(float)));
-  CUDA_RUNTIME_CHECK(cudaMalloc(&s1_dy_d, numSMs * 10 * sizeof(float)));
+  float *s1_y_d  = (float*) cudaMalloc3D(sizeof(float), numSMs, maxBatchSize, 10);
+  float *s1_dy_d = (float*) cudaMalloc3D(sizeof(float), numSMs, maxBatchSize, 10);
+  float *s1_y_h =  new float[maxBatchSize * numSMs * 10];
+  float *s1_dy_h = new float[maxBatchSize * numSMs * 10];
 
   // Do some training
   const int threadsPerBlock = 512;
@@ -322,41 +346,48 @@ int main(void) {
     // check the current quality of the network
     float error = 0.0;
     int numWrong = 0;
-    for (int i = 0; i < mnistNumTestImages; ++i) {
-
-      network_forward_kernel<<<1, blockDim>>>(
-          fc1_y_d, r1_y_d, fc2_y_d, r2_y_d, fc3_y_d, s1_y_d, fc1_w_d, fc1_b_d,
-          fc2_w_d, fc2_b_d, fc3_w_d, fc3_b_d, &imgTest_d[i * 784]);
-      CUDA_RUNTIME_CHECK(cudaMemcpy(s1_y_h, s1_y_d, 10 * sizeof(float),
-                                    cudaMemcpyDeviceToHost));
-
-      int actual = argmax(s1_y_h, 10);
-      const int expected = mnistTestLabels[i];
-
-      error += -1.0f * log(s1_y_h[expected]);
-      if (actual != expected) {
-        ++numWrong;
-      }
-    }
-    printf("%d %f %f\n", epoch, error / mnistNumTestImages,
-           float(numWrong) / mnistNumTestImages);
-
     for (int batchStart = 0; batchStart < mnistNumTestImages; batchStart += maxBatchSize) {
       const int batchEnd = min(mnistNumTestImages, batchStart + maxBatchSize);
       const int batchSize = batchEnd - batchStart;
 
-      const float *imgTrainBatch_d = &imgTrain_d[batchStart * 784];
+      const float *imgTestBatch_d = &imgTest_d[batchStart * 784];
       printf("batchStart = %d\n", batchStart);
+
+      network_forward_batch_kernel<<<1, blockDim>>>(
+        fc1_y_d, r1_y_d, fc2_y_d, r2_y_d, fc3_y_d, s1_y_d, fc1_w_d, fc1_b_d,
+        fc2_w_d, fc2_b_d, fc3_w_d, fc3_b_d, imgTestBatch_d, batchSize);
+
+      // copy network output back to host
+      CUDA_RUNTIME_CHECK(cudaMemcpy(s1_y_h, s1_y_d, maxBatchSize * 10 * sizeof(float), cudaMemcpyDeviceToHost));
+      for (int i = 0; i < batchSize; ++i) {
+        int actual = argmax(&s1_y_h[i * 10], 10);
+        const int expected = mnistTestLabels[i];
+        error += -1.0f * log(s1_y_h[expected]);
+        if (actual != expected) {
+          ++numWrong;
+        }
+      }
     }
 
-    // zero out gradient updates before training
-    zero_grid<<<numSMs, blockDim>>>(fc1_dw_d, numSMs * 1200 * 784);
-    zero_grid<<<numSMs, blockDim>>>(fc1_db_d, numSMs * 1200);
-    zero_grid<<<numSMs, blockDim>>>(fc2_dw_d, numSMs * 100 * 1200);
-    zero_grid<<<numSMs, blockDim>>>(fc2_db_d, numSMs * 100);
-    zero_grid<<<numSMs, blockDim>>>(fc3_dw_d, numSMs * 10 * 100);
-    zero_grid<<<numSMs, blockDim>>>(fc3_db_d, numSMs * 10);
-    CUDA_RUNTIME_CHECK(cudaDeviceSynchronize());
+    printf("%d %f %f\n", epoch, error / mnistNumTestImages,
+           float(numWrong) / mnistNumTestImages);
+
+    for (int batchStart = 0; batchStart < mnistNumTrainImages; batchStart += maxBatchSize) {
+      const int batchEnd = min(mnistNumTrainImages, batchStart + maxBatchSize);
+      const int batchSize = batchEnd - batchStart;
+
+      const float *imgTrainBatch_d = &imgTrain_d[batchStart * 784];
+      printf("batchStart = %d\n", batchStart);
+
+      // zero out gradient updates before training
+      zero_grid<<<numSMs, blockDim>>>(fc1_dw_d, numSMs * 1200 * 784);
+      zero_grid<<<numSMs, blockDim>>>(fc1_db_d, numSMs * 1200);
+      zero_grid<<<numSMs, blockDim>>>(fc2_dw_d, numSMs * 100 * 1200);
+      zero_grid<<<numSMs, blockDim>>>(fc2_db_d, numSMs * 100);
+      zero_grid<<<numSMs, blockDim>>>(fc3_dw_d, numSMs * 10 * 100);
+      zero_grid<<<numSMs, blockDim>>>(fc3_db_d, numSMs * 10);
+      CUDA_RUNTIME_CHECK(cudaDeviceSynchronize());
+    }
 
     train_kernel<<<gridDim, blockDim>>>(
         fc1_dw_d, fc1_db_d, fc1_dy_d, r1_dy_d, fc2_dw_d, fc2_db_d, fc2_dy_d,
@@ -365,7 +396,6 @@ int main(void) {
         fc3_w_d, fc3_b_d, imgTrain_d, labelTrain_d, mnistNumTrainImages);
 
     CUDA_RUNTIME_CHECK(cudaDeviceSynchronize());
-
 
     // Apply weight updates
     const float alpha = -1 * rate / mnistNumTrainImages;
@@ -377,8 +407,6 @@ int main(void) {
       saxpy_grid<<<(10 * 100 + 127) / 128, 128>>>(fc3_w_d, &fc3_dw_d[i * 10 * 100], alpha, 10 * 100);
       saxpy_grid<<<1, 32>>>(fc3_b_d, &fc3_db_d[i * 10], alpha, 10);
     }
-
-
   }
 
   return 0;
