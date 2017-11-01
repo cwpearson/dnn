@@ -67,7 +67,7 @@ __device__ void block_fc_backward(float *dx /* input gradient */,
   }
 }
 
-__device__ void fc_backward_block_batch(float *dx /* input gradient */,
+__device__ void fc_backward_batch_block(float *dx /* input gradient */,
   float *dw /* weight gradient */,
   float *db /* bias gradient */,
   const float *dy /*gradient at output*/,
