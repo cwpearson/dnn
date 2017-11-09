@@ -5,6 +5,7 @@
 #include <vector>
 
 #include "cuda_runtime_check.hpp"
+#include "cuda_malloc.hpp"
 #include "blas/saxpy.hu"
 #include "layer/fc.hu"
 #include "layer/sigmoid.hu"
@@ -15,29 +16,11 @@ const float rate = 0.2;
 const int numEpochs = 10000;
 const int trainSize = 6000;
 const int testSize = 1000;
-const int numSMs = 120;
-const int maxBatchSize = 4;
+const int numSMs = 10;
+const int maxBatchSize = 1;
 const bool useTrainForTest = false;
 const int cudaDevice = 0;
 
-
-template <typename T> 
-T *cudaMalloc1D(const size_t d1) {
-  T *p;
-  CUDA_RUNTIME_CHECK(cudaMalloc(&p, sizeof(T) * d1));
-  return p;
-}
-
-void *cudaMalloc3D(const size_t elemSize, const size_t d1, const size_t d2, const size_t d3) {
-  void *p;
-  CUDA_RUNTIME_CHECK(cudaMalloc(&p, elemSize * d1 * d2 * d3));
-  return p;
-}
-void *cudaMalloc4D(const size_t elemSize, const size_t d1, const size_t d2, const size_t d3, const size_t d4) {
-  void *p;
-  CUDA_RUNTIME_CHECK(cudaMalloc(&p, elemSize * d1 * d2 * d3 * d4));
-  return p;
-}
 
 #define Array3D(_ptr, _i, _j, _k, _d_i, _d_j) (_ptr[_i * (_d_i * _d_j) + _j * _d_j + _k])
 
@@ -127,12 +110,14 @@ __global__ void network_forward_kernel(float *fc1_y, float *r1_y, float *fc2_y,
                         fc2_w, fc2_b, fc3_w, fc3_b, img);
 }
 
+// zero_block uses a block of threads to collaboratively zero a pointer
 __device__ void zero_block(float *x, const int size) {
   for (int i = threadIdx.x; i < size; i += blockDim.x) {
     x[i] = 0.0f;
   }
 }
 
+// zero_block uses a grid of threads to collaboratively zero a pointer
 __global__ void zero_grid(float *x, const int size) {
   const int t = blockIdx.x * blockDim.x + threadIdx.x;
   for (int i = t; i < size; i += gridDim.x * blockDim.x) {
@@ -259,19 +244,28 @@ train_batch_kernel(float *fc1_dw, float *fc1_db, float *fc1_dy, float *r1_dy,
   network_forward_batch_block(fc1_y, r1_y, fc2_y, r2_y, fc3_y, s1_y, fc1_w, fc1_b,
                               fc2_w, fc2_b, fc3_w, fc3_b, img, batchSize);
 
-    // compute error of final layer
-    output_backward_batch_block(s1_dy, s1_y, label, 10, batchSize);
-    softmax_backward_batch_block(fc3_dy, s1_dy, s1_y, 10, batchSize);
 
-    // backprop error
-    fc_backward_batch_block(r2_dy, fc3_dw, fc3_db, fc3_dy, r2_y, fc3_w, fc3_b, 10,
-                      100, batchSize);
-    sigmoid_backward_batch_block(fc2_dy, r2_dy, r2_y, 100, batchSize);
-    fc_backward_batch_block(r1_dy, fc2_dw, fc2_db, fc2_dy, r1_y, fc2_w, fc2_b, 100,
-                      1200, batchSize);
-    sigmoid_backward_batch_block(fc1_dy, r1_dy, r1_y, 1200, batchSize);
-    fc_backward_batch_block(0 /* dont need error at input layer */, fc1_dw, fc1_db,
-                      fc1_dy, img, fc1_w, fc1_b, 1200, 784, batchSize);
+  // Zero out the weight updates
+  zero_block(fc1_dw, maxBatchSize * 1200 * 784);
+  zero_block(fc1_db, maxBatchSize * 784);
+  zero_block(fc2_dw, maxBatchSize * 100 * 1200);
+  zero_block(fc2_db, maxBatchSize * 1200);
+  zero_block(fc3_dw, maxBatchSize * 10 * 100);
+  zero_block(fc3_db, maxBatchSize * 10);
+
+  // compute error of final layer
+  output_backward_batch_block(s1_dy, s1_y, label, 10, batchSize);
+  softmax_backward_batch_block(fc3_dy, s1_dy, s1_y, 10, batchSize);
+
+  // backprop error
+  fc_backward_batch_block(r2_dy, fc3_dw, fc3_db, fc3_dy, r2_y, fc3_w, fc3_b, 10,
+                          100, batchSize);
+  sigmoid_backward_batch_block(fc2_dy, r2_dy, r2_y, 100, batchSize);
+  fc_backward_batch_block(r1_dy, fc2_dw, fc2_db, fc2_dy, r1_y, fc2_w, fc2_b, 100,
+                          1200, batchSize);
+  sigmoid_backward_batch_block(fc1_dy, r1_dy, r1_y, 1200, batchSize);
+  fc_backward_batch_block(0 /* dont need error at input layer */, fc1_dw, fc1_db,
+                          fc1_dy, img, fc1_w, fc1_b, 1200, 784, batchSize);
 }
 
 
@@ -376,7 +370,7 @@ int main(void) {
   init_weights(fc3_w_h, 10 * 100, 100);
   init_weights(fc3_b_h, 10, 10);
 
-  // GPU only needs one copy of weights and biases
+  // GPU only needs one copy of model weights and biases
   float *fc1_w_d, *fc1_b_d, *fc2_w_d, *fc2_b_d, *fc3_w_d, *fc3_b_d;
   CUDA_RUNTIME_CHECK(cudaMalloc(&fc1_w_d, 784 * 1200 * sizeof(float)));
   CUDA_RUNTIME_CHECK(cudaMalloc(&fc1_b_d, 1200 * sizeof(float)));
@@ -397,50 +391,50 @@ int main(void) {
   CUDA_RUNTIME_CHECK(
       cudaMemcpy(fc3_b_d, fc3_b_h, 10 * sizeof(float), cudaMemcpyHostToDevice));
 
-  // Anything updated by the device needs space per trainer and per mini batch
+  // Anything updated by the device needs space per trainer and per minibatch
   // one copy of gradients, output per trainer
   // FIXME - shared memory?
   float *fc1_dw_h = new float[maxBatchSize * numSMs * 784 * 1200];
   float *fc1_db_h = new float[maxBatchSize * numSMs * 1200];
   float *fc1_dy_h = new float[maxBatchSize * numSMs * 1200];
   float *fc1_y_h  = new float[maxBatchSize * numSMs * 1200];
-  float *fc1_y_d = (float*) cudaMalloc4D(sizeof(float), numSMs, maxBatchSize, 784, 1200); // device layer output
-  float *fc1_dw_d = (float*) cudaMalloc4D(sizeof(float), numSMs, maxBatchSize, 784, 1200); // gradients
-  float *fc1_dy_d = (float*) cudaMalloc3D(sizeof(float), numSMs, maxBatchSize, 1200);
-  float *fc1_db_d = (float*) cudaMalloc3D(sizeof(float), numSMs, maxBatchSize, 1200);
+  float *fc1_y_d =  cudaMalloc4D<float>(numSMs, maxBatchSize, 784, 1200); // device layer output
+  float *fc1_dw_d = cudaMalloc4D<float>(numSMs, maxBatchSize, 784, 1200); // gradients
+  float *fc1_dy_d = cudaMalloc3D<float>(numSMs, maxBatchSize, 1200);
+  float *fc1_db_d = cudaMalloc3D<float>(numSMs, maxBatchSize, 1200);
 
   // relu outputs
   float *r1_dy_h = new float[maxBatchSize * numSMs * 1200 * sizeof(float)];
   float *r1_y_h = new float[maxBatchSize * numSMs * 1200 * sizeof(float)];
-  float *r1_dy_d = (float*) cudaMalloc3D(sizeof(float), numSMs, maxBatchSize, 1200);
-  float *r1_y_d = (float*) cudaMalloc3D(sizeof(float), numSMs, maxBatchSize, 1200);
+  float *r1_dy_d = cudaMalloc3D<float>(numSMs, maxBatchSize, 1200);
+  float *r1_y_d  = cudaMalloc3D<float>(numSMs, maxBatchSize, 1200);
 
   // fc2 outputs
-  float *fc2_dw_d = (float*) cudaMalloc4D(sizeof(float), numSMs, maxBatchSize, 1200, 100);
-  float *fc2_db_d = (float*) cudaMalloc3D(sizeof(float), numSMs, maxBatchSize, 100);
-  float *fc2_dy_d = (float*) cudaMalloc3D(sizeof(float), numSMs, maxBatchSize, 100);
-  float *fc2_y_d  = (float*) cudaMalloc3D(sizeof(float), numSMs, maxBatchSize, 100);
+  float *fc2_dw_d = cudaMalloc4D<float>(numSMs, maxBatchSize, 1200, 100);
+  float *fc2_db_d = cudaMalloc3D<float>(numSMs, maxBatchSize, 100);
+  float *fc2_dy_d = cudaMalloc3D<float>(numSMs, maxBatchSize, 100);
+  float *fc2_y_d  = cudaMalloc3D<float>(numSMs, maxBatchSize, 100);
   float *fc2_dw_h = new float[maxBatchSize * numSMs * 1200 * 100];
   float *fc2_db_h = new float[maxBatchSize * numSMs * 100];
   float *fc2_dy_h = new float[maxBatchSize * numSMs * 100];
   float *fc2_y_h =  new float[maxBatchSize * numSMs * 100];
 
-  float *r2_dy_d = (float *) cudaMalloc3D(sizeof(float), numSMs, maxBatchSize, 100);
-  float *r2_y_d =  (float *) cudaMalloc3D(sizeof(float), numSMs, maxBatchSize, 100);
+  float *r2_dy_d = cudaMalloc3D<float>(numSMs, maxBatchSize, 100);
+  float *r2_y_d =  cudaMalloc3D<float>(numSMs, maxBatchSize, 100);
   float *r2_dy_h = new float[maxBatchSize * numSMs * 100 * sizeof(float)];
   float *r2_y_h =  new float[maxBatchSize * numSMs * 100 * sizeof(float)];
 
-  float *fc3_dw_d = (float*) cudaMalloc4D(sizeof(float), numSMs, maxBatchSize, 100, 10); 
-  float *fc3_db_d = (float*) cudaMalloc3D(sizeof(float), numSMs, maxBatchSize, 10); 
-  float *fc3_dy_d = (float*) cudaMalloc3D(sizeof(float), numSMs, maxBatchSize, 10);
-  float *fc3_y_d  = (float*) cudaMalloc3D(sizeof(float), numSMs, maxBatchSize, 10);
+  float *fc3_dw_d = cudaMalloc4D<float>(numSMs, maxBatchSize, 100, 10); 
+  float *fc3_db_d = cudaMalloc3D<float>(numSMs, maxBatchSize, 10); 
+  float *fc3_dy_d = cudaMalloc3D<float>(numSMs, maxBatchSize, 10);
+  float *fc3_y_d  = cudaMalloc3D<float>(numSMs, maxBatchSize, 10);
   float *fc3_dw_h = new float[maxBatchSize * numSMs * 100 * 10];
   float *fc3_db_h = new float[maxBatchSize * numSMs * 10];
   float *fc3_dy_h = new float[maxBatchSize * numSMs * 10];
   float *fc3_y_h =  new float[maxBatchSize * numSMs * 10];
 
-  float *s1_y_d  = (float*) cudaMalloc3D(sizeof(float), numSMs, maxBatchSize, 10);
-  float *s1_dy_d = (float*) cudaMalloc3D(sizeof(float), numSMs, maxBatchSize, 10);
+  float *s1_y_d  = cudaMalloc3D<float>(numSMs, maxBatchSize, 10);
+  float *s1_dy_d = cudaMalloc3D<float>(numSMs, maxBatchSize, 10);
   float *s1_y_h =  new float[maxBatchSize * numSMs * 10];
   float *s1_dy_h = new float[maxBatchSize * numSMs * 10];
 
@@ -468,7 +462,7 @@ int main(void) {
       for (int i = 0; i < batchSize; ++i) {
         int actual = argmax(&s1_y_h[i * 10], 10);
         const int expected = mnistTestLabels[batchStart + i];
-        error += -1.0f * log(s1_y_h[expected]);
+        error += -1.0f * log(s1_y_h[i * 10 + expected]);
         if (actual != expected) {
           ++numWrong;
         }
@@ -488,7 +482,7 @@ int main(void) {
         const int batchSize = max(0 , min(maxBatchSize, imgsLeft));
         perLearnerBatchSize_h[learnerIdx] = batchSize;
         imgIdx += batchSize;
-        assert(imgIdx < mnistNumTrainImages);
+        assert(imgIdx <= mnistNumTrainImages);
       }
 
       // copy that data to GPU
@@ -503,15 +497,17 @@ int main(void) {
         fc3_w_d, fc3_b_d, perLearnerImg_d, perLearnerLabel_d, perLearnerBatchSize_d);
     CUDA_RUNTIME_CHECK(cudaDeviceSynchronize());
 
-    // Apply weight updates
+    // Apply weight updates. Each learner and each image in a batch produces its own set of updates
     const float alpha = -1 * rate / mnistNumTrainImages;
     for (size_t i = 0; i < numSMs; ++i) {
-      saxpy_grid<<<(784 * 1200 + 255) / 256, 256>>>(fc1_w_d, &fc1_dw_d[i * 784 * 1200], alpha, 784 * 1200);
-      saxpy_grid<<<(1200 + 255) / 256, 256>>>(fc1_b_d, &fc1_db_d[i * 1200], alpha, 1200);
-      saxpy_grid<<<(1200 * 100 + 255) / 256, 256>>>(fc2_w_d, &fc2_dw_d[i * 1200 * 100], alpha, 1200 * 100);
-      saxpy_grid<<<(100 + 31) / 32, 32>>>(fc2_b_d, &fc2_db_d[i * 100], alpha, 100);
-      saxpy_grid<<<(10 * 100 + 127) / 128, 128>>>(fc3_w_d, &fc3_dw_d[i * 10 * 100], alpha, 10 * 100);
-      saxpy_grid<<<1, 32>>>(fc3_b_d, &fc3_db_d[i * 10], alpha, 10);
+      for (size_t j = 0; j < maxBatchSize; ++j) {
+      saxpy_grid<<<(784 * 1200 + 255) / 256, 256>>>(fc1_w_d, &fc1_dw_d[(i * maxBatchSize + j) * 784 * 1200], alpha, 784 * 1200);
+      saxpy_grid<<<(1200 + 255) / 256, 256>>>(fc1_b_d, &fc1_db_d[(i * maxBatchSize + j) * 1200], alpha, 1200);
+      saxpy_grid<<<(1200 * 100 + 255) / 256, 256>>>(fc2_w_d, &fc2_dw_d[(i * maxBatchSize + j) * 1200 * 100], alpha, 1200 * 100);
+      saxpy_grid<<<(100 + 31) / 32, 32>>>(fc2_b_d, &fc2_db_d[(i * maxBatchSize + j) * 100], alpha, 100);
+      saxpy_grid<<<(10 * 100 + 127) / 128, 128>>>(fc3_w_d, &fc3_dw_d[(i * maxBatchSize + j) * 10 * 100], alpha, 10 * 100);
+      saxpy_grid<<<1, 32>>>(fc3_b_d, &fc3_db_d[(i * maxBatchSize + j) * 10], alpha, 10);
+      }
     }
   }
 }
