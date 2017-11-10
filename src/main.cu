@@ -398,10 +398,10 @@ int main(void) {
   float *fc1_db_h = new float[maxBatchSize * numSMs * 1200];
   float *fc1_dy_h = new float[maxBatchSize * numSMs * 1200];
   float *fc1_y_h  = new float[maxBatchSize * numSMs * 1200];
-  float *fc1_y_d =  cudaMalloc4D<float>(numSMs, maxBatchSize, 784, 1200); // device layer output
   float *fc1_dw_d = cudaMalloc4D<float>(numSMs, maxBatchSize, 784, 1200); // gradients
-  float *fc1_dy_d = cudaMalloc3D<float>(numSMs, maxBatchSize, 1200);
   float *fc1_db_d = cudaMalloc3D<float>(numSMs, maxBatchSize, 1200);
+  float *fc1_dy_d = cudaMalloc3D<float>(numSMs, maxBatchSize, 1200);
+  float *fc1_y_d =  cudaMalloc3D<float>(numSMs, maxBatchSize, 1200); // device layer output
 
   // relu outputs
   float *r1_dy_h = new float[maxBatchSize * numSMs * 1200 * sizeof(float)];
