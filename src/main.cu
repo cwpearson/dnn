@@ -49,9 +49,9 @@ __device__ void output_backward_batch_block(float *errorOut, const float *networ
     // log/liklihood and softmax error
     for (int o = threadIdx.x; o < size; o += blockDim.x) {
       if (o == E(b)) {
-        EO(b, o) = NO(b, 0) - 1;
+        EO(b, o) = NO(b, o) - 1;
       } else {
-        EO(b, o) = NO(b, 0);
+        EO(b, o) = NO(b, o);
       }
     }
   }
