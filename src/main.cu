@@ -14,11 +14,11 @@
 
 const float rate = 0.2;
 const int numEpochs = 10000;
-const int trainSize = 600;
+const int trainSize = 100;
 const int testSize = 100;
 const int numSMs = 10;
 const int maxBatchSize = 1;
-const bool useTrainForTest = false;
+const bool useTrainForTest = true;
 const int cudaDevice = 0;
 
 
@@ -213,28 +213,28 @@ train_batch_kernel(float *fc1_dw, float *fc1_db, float *fc1_dy, float *r1_dy,
 
   // each trainer (threadblock) has its own work space
   // layer outputs (and inputs)
-  fc1_y = &fc1_y[trainerIdx * 1200];
-  r1_y = &r1_y[trainerIdx * 1200];
-  fc2_y = &fc2_y[trainerIdx * 100];
-  r2_y = &r2_y[trainerIdx * 100];
-  fc3_y = &fc3_y[trainerIdx * 10];
-  s1_y = &s1_y[trainerIdx * 10];
+  fc1_y = &fc1_y[trainerIdx * maxBatchSize * 1200];
+  r1_y  = &r1_y [trainerIdx * maxBatchSize * 1200];
+  fc2_y = &fc2_y[trainerIdx * maxBatchSize * 100];
+  r2_y  = &r2_y [trainerIdx * maxBatchSize * 100];
+  fc3_y = &fc3_y[trainerIdx * maxBatchSize * 10];
+  s1_y  = &s1_y [trainerIdx * maxBatchSize * 10];
 
   // parameter updates, error propogation
-  fc1_dw = &fc1_dw[trainerIdx * 1200 * 784];
-  fc1_db = &fc1_db[trainerIdx * 1200];
-  fc1_dy = &fc1_dy[trainerIdx * 1200];
-  r1_dy = &r1_dy[trainerIdx * 1200];
+  fc1_dw = &fc1_dw[trainerIdx * maxBatchSize * 1200 * 784];
+  fc1_db = &fc1_db[trainerIdx * maxBatchSize * 1200];
+  fc1_dy = &fc1_dy[trainerIdx * maxBatchSize * 1200];
+  r1_dy  = &r1_dy [trainerIdx * maxBatchSize * 1200];
 
-  fc2_dw = &fc2_dw[trainerIdx * 100 * 1200];
-  fc2_db = &fc2_db[trainerIdx * 100];
-  fc2_dy = &fc2_dy[trainerIdx * 100];
-  r2_dy = &r2_dy[trainerIdx * 100];
+  fc2_dw = &fc2_dw[trainerIdx * maxBatchSize * 100 * 1200];
+  fc2_db = &fc2_db[trainerIdx * maxBatchSize * 100];
+  fc2_dy = &fc2_dy[trainerIdx * maxBatchSize * 100];
+  r2_dy  = &r2_dy [trainerIdx * maxBatchSize * 100];
 
-  fc3_dw = &fc3_dw[trainerIdx * 10 * 100];
-  fc3_db = &fc3_db[trainerIdx * 10];
-  fc3_dy = &fc3_dy[trainerIdx * 10];
-  s1_dy = &s1_dy[trainerIdx * 10];
+  fc3_dw = &fc3_dw[trainerIdx * maxBatchSize * 10 * 100];
+  fc3_db = &fc3_db[trainerIdx * maxBatchSize * 10];
+  fc3_dy = &fc3_dy[trainerIdx * maxBatchSize * 10];
+  s1_dy  = &s1_dy [trainerIdx * maxBatchSize * 10];
 
   const float *img = perLearnerImg[trainerIdx]; // batch image data
   const int *label = perLearnerLabel[trainerIdx]; // batch label data
