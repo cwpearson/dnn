@@ -404,8 +404,8 @@ int main(void) {
   float *fc1_y_d =  cudaMalloc3D<float>(numSMs, maxBatchSize, 1200); // device layer output
 
   // relu outputs
-  float *r1_dy_h = new float[maxBatchSize * numSMs * 1200 * sizeof(float)];
-  float *r1_y_h = new float[maxBatchSize * numSMs * 1200 * sizeof(float)];
+  float *r1_dy_h = new float[maxBatchSize * numSMs * 1200];
+  float *r1_y_h  = new float[maxBatchSize * numSMs * 1200];
   float *r1_dy_d = cudaMalloc3D<float>(numSMs, maxBatchSize, 1200);
   float *r1_y_d  = cudaMalloc3D<float>(numSMs, maxBatchSize, 1200);
 
@@ -421,8 +421,8 @@ int main(void) {
 
   float *r2_dy_d = cudaMalloc3D<float>(numSMs, maxBatchSize, 100);
   float *r2_y_d =  cudaMalloc3D<float>(numSMs, maxBatchSize, 100);
-  float *r2_dy_h = new float[maxBatchSize * numSMs * 100 * sizeof(float)];
-  float *r2_y_h =  new float[maxBatchSize * numSMs * 100 * sizeof(float)];
+  float *r2_dy_h = new float[maxBatchSize * numSMs * 100];
+  float *r2_y_h =  new float[maxBatchSize * numSMs * 100];
 
   float *fc3_dw_d = cudaMalloc4D<float>(numSMs, maxBatchSize, 100, 10); 
   float *fc3_db_d = cudaMalloc3D<float>(numSMs, maxBatchSize, 10); 
