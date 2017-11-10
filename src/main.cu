@@ -14,8 +14,8 @@
 
 const float rate = 0.2;
 const int numEpochs = 10000;
-const int trainSize = 6000;
-const int testSize = 1000;
+const int trainSize = 600;
+const int testSize = 100;
 const int numSMs = 10;
 const int maxBatchSize = 1;
 const bool useTrainForTest = false;
@@ -247,9 +247,9 @@ train_batch_kernel(float *fc1_dw, float *fc1_db, float *fc1_dy, float *r1_dy,
 
   // Zero out the weight updates
   zero_block(fc1_dw, maxBatchSize * 1200 * 784);
-  zero_block(fc1_db, maxBatchSize * 784);
+  zero_block(fc1_db, maxBatchSize * 1200);
   zero_block(fc2_dw, maxBatchSize * 100 * 1200);
-  zero_block(fc2_db, maxBatchSize * 1200);
+  zero_block(fc2_db, maxBatchSize * 100);
   zero_block(fc3_dw, maxBatchSize * 10 * 100);
   zero_block(fc3_db, maxBatchSize * 10);
 
