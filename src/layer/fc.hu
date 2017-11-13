@@ -17,8 +17,8 @@ __device__ void block_fc_forward(float *y, const float *x, const float *weight,
 __device__ void fc_forward_batch_block(float *y, const float *x, const float *weight,
   const float *bias, const int outSize, const int inSize, const int batchSize) {
 
-  #define Y(b, o) (y[b * outSize + o])
-  #define X(b, i) (x[b * inSize + i])
+  #define Y(bi, oi) (y[bi * outSize + oi])
+  #define X(bi, ii) (x[bi * inSize + ii])
   for (int b = 0; b < batchSize; ++b) {
     for (int o = threadIdx.x; o < outSize; o += blockDim.x) {
       float acc = 0;

@@ -13,13 +13,14 @@
 #include "mnist.hpp"
 
 const float rate = 0.2;
-const int numEpochs = 10000;
+const int numEpochs = 1;
 const int trainSize = 100;
 const int testSize = 100;
 const int numSMs = 10;
 const int maxBatchSize = 1;
 const bool useTrainForTest = true;
 const int cudaDevice = 0;
+const int randomSeed = 4;
 
 
 #define Array3D(_ptr, _i, _j, _k, _d_i, _d_j) (_ptr[_i * (_d_i * _d_j) + _j * _d_j + _k])
@@ -244,7 +245,6 @@ train_batch_kernel(float *fc1_dw, float *fc1_db, float *fc1_dy, float *r1_dy,
   network_forward_batch_block(fc1_y, r1_y, fc2_y, r2_y, fc3_y, s1_y, fc1_w, fc1_b,
                               fc2_w, fc2_b, fc3_w, fc3_b, img, batchSize);
 
-
   // Zero out the weight updates
   zero_block(fc1_dw, maxBatchSize * 1200 * 784);
   zero_block(fc1_db, maxBatchSize * 1200);
@@ -291,7 +291,7 @@ int argmax(const float *x, const int size) {
 
 int main(void) {
 
-  printf("Using batch size: %d\n", maxBatchSize);
+  srand(randomSeed);
 
   // Read the input data
   float *mnistTestData, *mnistTrainData;
@@ -319,7 +319,7 @@ int main(void) {
     mnistNumTestImages = testSize;
   }
 
-
+  printf("Using batch size: %d\n", maxBatchSize);
   printf("Using %d training images\n", mnistNumTrainImages);
   printf("Using %d test images\n", mnistNumTestImages);
 
@@ -457,8 +457,21 @@ int main(void) {
         fc1_y_d, r1_y_d, fc2_y_d, r2_y_d, fc3_y_d, s1_y_d, fc1_w_d, fc1_b_d,
         fc2_w_d, fc2_b_d, fc3_w_d, fc3_b_d, imgTestBatch_d, batchSize);
 
+      // copy fc1 output back to host
+      printf("%d\n", batchSize);
+      CUDA_RUNTIME_CHECK(cudaMemcpy(fc3_y_h, fc3_y_d, batchSize * 10 * sizeof(float), cudaMemcpyDeviceToHost));
+      for (int i = 0; i < 10; ++i) {
+        printf("%f ", fc3_y_h[i]);
+      }
+      printf("\n");
+      exit(-1);
+
+
       // copy network output back to host
       CUDA_RUNTIME_CHECK(cudaMemcpy(s1_y_h, s1_y_d, batchSize * 10 * sizeof(float), cudaMemcpyDeviceToHost));
+
+
+
       for (int i = 0; i < batchSize; ++i) {
         int actual = argmax(&s1_y_h[i * 10], 10);
         const int expected = mnistTestLabels[batchStart + i];
