@@ -18,7 +18,7 @@ const int trainSize = 100;
 const int testSize = 100;
 const int numSMs = 10;
 const int maxBatchSize = 1;
-const bool useTrainForTest = true;
+const bool useTrainForTest = false;
 const int cudaDevice = 0;
 
 
