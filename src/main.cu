@@ -14,10 +14,10 @@
 
 const float rate = 0.2;
 const int numEpochs = 10000;
-const int trainSize = 100;
-const int testSize = 100;
+const int trainSize = 1000;
+const int testSize = 1000;
 const int numSMs = 10;
-const int maxBatchSize = 1;
+const int maxBatchSize = 4;
 const bool useTrainForTest = false;
 const int cudaDevice = 0;
 
