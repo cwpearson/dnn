@@ -446,7 +446,7 @@ int main(void) {
 
     // check the current quality of the network
     float error = 0.0;
-    int numWrong = 0;
+    int numCorrect = 0;
     for (int batchStart = 0; batchStart < mnistNumTestImages; batchStart += maxBatchSize) {
       const int batchEnd = min(mnistNumTestImages, batchStart + maxBatchSize);
       const int batchSize = batchEnd - batchStart;
@@ -463,14 +463,14 @@ int main(void) {
         int actual = argmax(&s1_y_h[i * 10], 10);
         const int expected = mnistTestLabels[batchStart + i];
         error += -1.0f * log(s1_y_h[i * 10 + expected]);
-        if (actual != expected) {
-          ++numWrong;
+        if (actual == expected) {
+          ++numCorrect;
         }
       }
     }
 
-    printf("epoch=%d error=%f accuracy=%f (%d wrong / %d total)\n", epoch, error / mnistNumTestImages,
-           float(numWrong) / mnistNumTestImages, numWrong, mnistNumTestImages);
+    printf("epoch=%d error=%f accuracy=%f (%d correct / %d total)\n", epoch, error / mnistNumTestImages,
+           float(numCorrect) / mnistNumTestImages, numCorrect, mnistNumTestImages);
 
     // Do training
     for (int imgIdx = 0; imgIdx < mnistNumTrainImages; ) {
